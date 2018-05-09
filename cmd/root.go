@@ -47,7 +47,7 @@ var rootCmd = &cobra.Command{
 	Short: "Download every git repo under a github organisation - concurrently",
 	Long: `gh-recurse downloads every git repository under a github organisation
 
-	ex. gh-recurse github
+	ex. GITHUB_OAUTH_TOKEN=your-fancy-token gh-recurse github
 
 	will download every github repository under the github organisation
 	`,
@@ -73,6 +73,14 @@ func run(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	opt = &github.RepositoryListByOrgOptions{Type: "forks"}
+	forks, _, err := client.Repositories.ListByOrg(ctx, orgName, opt)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	repos = append(repos, forks...)
 
 	cloneOptions := &git.CloneOptions{}
 	cloneOptions.FetchOptions = &git.FetchOptions{
