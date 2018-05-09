@@ -40,6 +40,7 @@ import (
 )
 
 var cfgFile string
+var concurrency int
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -90,16 +91,15 @@ func run(cmd *cobra.Command, args []string) {
 		},
 	}
 
-	concurrency := 4
 	var wg sync.WaitGroup
+	wg.Add(len(repos))
 	repoCh := make(chan *github.Repository)
 
 	for i := 0; i < concurrency; i++ {
 		go func() {
 			for repo := range repoCh {
-				wg.Add(1)
 				defer wg.Done()
-				log.Println("Working on: ", *repo.Name)
+				log.Printf("Working on: %s", *repo.Name)
 				_, err := git.Clone(fmt.Sprintf("git@github.com:%s/%s", orgName, *repo.Name), *repo.Name, cloneOptions)
 				if err != nil {
 					if strings.Contains(err.Error(), "exists and is not an empty directory") {
@@ -116,6 +116,7 @@ func run(cmd *cobra.Command, args []string) {
 	for _, repo := range repos {
 		repoCh <- repo
 	}
+	close(repoCh)
 
 	wg.Wait()
 }
@@ -136,6 +137,7 @@ func init() {
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.gh-recurse.yaml)")
+	rootCmd.PersistentFlags().IntVar(&concurrency, "concurrency", 4, "")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
