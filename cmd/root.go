@@ -26,6 +26,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,7 +41,9 @@ import (
 )
 
 var cfgFile string
+var repoType string
 var concurrency int
+var dryRun bool
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -69,19 +72,22 @@ func run(cmd *cobra.Command, args []string) {
 	)
 	tc := oauth2.NewClient(ctx, ts)
 	client := github.NewClient(tc)
-	opt := &github.RepositoryListByOrgOptions{Type: "all"}
-	repos, _, err := client.Repositories.ListByOrg(ctx, orgName, opt)
-	if err != nil {
-		log.Fatal(err)
+	var allRepos []*github.Repository
+	opt := &github.RepositoryListByOrgOptions{
+		Type:        repoType,
+		ListOptions: github.ListOptions{PerPage: 100},
 	}
-
-	opt = &github.RepositoryListByOrgOptions{Type: "forks"}
-	forks, _, err := client.Repositories.ListByOrg(ctx, orgName, opt)
-	if err != nil {
-		log.Fatal(err)
+	for {
+		repos, resp, err := client.Repositories.ListByOrg(ctx, orgName, opt)
+		if err != nil {
+			log.Fatal(err)
+		}
+		allRepos = append(allRepos, repos...)
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
 	}
-
-	repos = append(repos, forks...)
 
 	cloneOptions := &git.CloneOptions{}
 	cloneOptions.FetchOptions = &git.FetchOptions{
@@ -92,7 +98,7 @@ func run(cmd *cobra.Command, args []string) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(len(repos))
+	wg.Add(len(allRepos))
 	repoCh := make(chan *github.Repository)
 
 	for i := 0; i < concurrency; i++ {
@@ -100,6 +106,9 @@ func run(cmd *cobra.Command, args []string) {
 			for repo := range repoCh {
 				defer wg.Done()
 				log.Printf("Working on: %s", *repo.Name)
+				if dryRun {
+					continue
+				}
 				_, err := git.Clone(fmt.Sprintf("git@github.com:%s/%s", orgName, *repo.Name), *repo.Name, cloneOptions)
 				if err != nil {
 					if strings.Contains(err.Error(), "exists and is not an empty directory") {
@@ -107,13 +116,13 @@ func run(cmd *cobra.Command, args []string) {
 						continue
 					}
 
-					log.Fatal(err)
+					log.Printf("Working on: %s, clone failed, err: ", *repo.Name, err)
 				}
 			}
 		}()
 	}
 
-	for _, repo := range repos {
+	for _, repo := range allRepos {
 		repoCh <- repo
 	}
 	close(repoCh)
@@ -137,7 +146,9 @@ func init() {
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.gh-recurse.yaml)")
-	rootCmd.PersistentFlags().IntVar(&concurrency, "concurrency", 4, "")
+	rootCmd.PersistentFlags().StringVar(&repoType, "type", "all", "type: public, private, all")
+	rootCmd.PersistentFlags().IntVar(&concurrency, "concurrency", runtime.NumCPU(), "")
+	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
